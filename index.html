@@ -1,0 +1,815 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Тыква FM</title>
+<!-- Внутренний эфир: не показывать в поисковиках -->
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<link rel="preload" as="image" href="assets/background.webp">
+<link rel="preload" as="image" href="assets/radio.webp">
+<!-- Настройки эфира грузим всегда свежими, чтобы правки playlist.js доходили до слушателей сразу -->
+<script>document.write('<script src="playlist.js?v=' + Date.now() + '"><\/script>');</script>
+<style>
+  /* Сцена по пакету оформления tykva-fm-assets-v1: координаты предметов — на холсте 1672×941 (телефон 600×800).
+     Планы: стена → тыква и свечи (дальний план, у края стола) → приёмник (ближний план) → пыльца */
+  :root {
+    color-scheme: dark;
+    --ink: #100d18;
+    --violet: #45305f;
+    --amber: #ff982e;
+    --gold: #ffb536;
+    --ivory: #f3e9da;
+    --muted: #b2a6be;
+    --title: #ffe7bd;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    background: var(--ink); color: var(--ivory);
+    font-family: "Segoe UI", Arial, sans-serif;
+    min-height: 100vh; min-height: 100dvh;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+  }
+
+  :root {
+    --level: 0;         /* насколько громко сейчас в музыке относительно средней громкости песни, 0–1 */
+    --beat: 0;          /* вспышка на ударе, 0–1, быстро гаснет */
+  }
+  .scene {
+    --canvas: 1672;
+    container-type: inline-size;
+    position: relative; overflow: visible;
+    /* Предметы целиком помещаются в окно без прокрутки; фон за ними растягивается на весь экран */
+    width: min(100vw, calc(100vh * 1672 / 941));
+    width: min(100vw, calc(100dvh * 1672 / 941));
+    aspect-ratio: 1672 / 941;
+  }
+  /* Фон на весь экран: JS подгоняет его так, чтобы линия стола совпадала с предметами сцены */
+  .backdrop { position: fixed; left: 0; top: 0; width: 100vw; height: 100vh; pointer-events: none; overflow: hidden; }
+  .bg-layer { position: absolute; }
+  .bg-layer > div, .vignette { position: absolute; inset: 0; }
+  .background { background: url("assets/background.webp") center / 100% 100% no-repeat; }
+  /* Мерцающий фиолетовый свет на стене за приёмником */
+  .wall-glow {
+    mix-blend-mode: screen;
+    background: radial-gradient(ellipse 34% 40% at 50% 40%, #9a5ae066, #6a35a833 45%, transparent 75%);
+    animation: wall-flicker 9s linear infinite;
+  }
+  .shade { background: linear-gradient(#100d185e, transparent 55%); }
+  .vignette {
+    background: linear-gradient(#100d1880, transparent 30%),
+                radial-gradient(ellipse 75% 80% at 50% 55%, transparent 50%, #100d18bb);
+  }
+
+  header { position: absolute; top: 3%; width: 100%; text-align: center; z-index: 5; pointer-events: none; }
+  .brand { font: clamp(9px, 1cqw, 20px) Georgia, serif; letter-spacing: .45em; color: var(--muted); }
+  h1 {
+    font: 700 clamp(34px, 7cqw, 134px)/1 Georgia, "Times New Roman", serif;
+    margin: 1.2% 0 .3%; color: var(--title); text-shadow: 0 0 22px #ff982e30;
+  }
+  header p { font: clamp(12px, 1.7cqw, 30px) Georgia, serif; margin: .5% 0 1%; }
+
+  .placed {
+    position: absolute;
+    left: calc(var(--x) * 100% / var(--canvas));
+    top: calc(var(--y) * 100cqw / var(--canvas));
+    width: calc(var(--w) * 100% / var(--canvas));
+  }
+  .placed > img { display: block; width: 100%; height: auto; }
+
+  /* Дальний план: чуть меньше, темнее и мягче */
+  .pumpkin { --x: 120; --y: 500; --w: 250; z-index: 2; }
+  .candles { --x: 1320; --y: 528; --w: 200; z-index: 2; }
+  .pumpkin > img, .candles > img:first-child { filter: brightness(.86) saturate(.92) blur(.6px); }
+
+  /* Ближний план: приёмник крупнее и ниже, стоит у переднего края стола */
+  .radio { --x: 226; --y: 150; --w: 1220; z-index: 4; filter: drop-shadow(0 18px 18px #000c); }
+  .radio-shadow {
+    --x: 330; --y: 770; --w: 1010; height: 5%; z-index: 3; pointer-events: none;
+    background: radial-gradient(ellipse, #000d, transparent 70%); filter: blur(8px);
+  }
+
+  /* Пульсирующее свечение лица приёмника */
+  .radio-glow {
+    position: absolute; left: 50%; top: 60%; width: 34%; height: 58%;
+    transform: translate(-50%, -50%); border-radius: 50%; pointer-events: none;
+    background: radial-gradient(ellipse, #ffcf6e55, #ff982e2e 40%, transparent 70%);
+    mix-blend-mode: screen; animation: face-pulse 3.2s ease-in-out infinite;
+  }
+  .is-playing .radio-glow { animation: face-pulse-live 1.6s ease-in-out infinite; }
+  /* Свечение лица, которое разгорается от музыки */
+  .radio-beat {
+    position: absolute; left: 50%; top: 60%; width: 40%; height: 66%;
+    transform: translate(-50%, -50%); border-radius: 50%; pointer-events: none;
+    background: radial-gradient(ellipse, #ffe08a99, #ffa83a44 38%, transparent 70%);
+    mix-blend-mode: screen; opacity: calc(var(--level) * .55 + var(--beat) * .7);
+  }
+
+  /* Всё, что светится, становится ярче на громких местах и вспыхивает на ударах */
+  .wall-glow { filter: brightness(calc(1 + var(--level) * .5 + var(--beat) * .45)); }
+  .halo { filter: brightness(calc(1 + var(--level) * .6 + var(--beat) * .6)); }
+  .reflection { filter: blur(9px) brightness(calc(1 + var(--level) * .8 + var(--beat) * .6)); }
+  .candles > .flame { scale: calc(1 + var(--beat) * .14); }
+  .radio button::before {
+    content: ""; position: absolute; inset: -4px; border-radius: 50%; pointer-events: none;
+    box-shadow: 0 0 34px 12px #ffc65a; opacity: calc(var(--beat) * .9);
+  }
+  .is-playing .radio { animation: radio-warm 4.7s ease-in-out infinite; }
+
+  /* Стрелка шкалы частот: окно шкалы на картинке — y 280…332 из 941 */
+  .needle {
+    position: absolute; top: 29.5%; height: 6%; width: .3%; min-width: 2px;
+    left: 52%; transform: translateX(-50%); pointer-events: none; border-radius: 2px;
+    background: linear-gradient(#ffe9a8, #ffb536 60%, #ff7a1a);
+    box-shadow: 0 0 6px 1px #ffb536cc, 0 0 16px 3px #ff982e66;
+  }
+  .needle.locked { animation: needle-lock .9s ease-out; }
+  .radio button {
+    position: absolute; left: 49.7%; top: 60.3%; transform: translate(-50%, -50%);
+    width: 8.5%; min-width: 44px; aspect-ratio: 1; border-radius: 50%;
+    border: 3px solid #714616;
+    background: radial-gradient(circle at 40% 30%, #ffe49a, var(--gold) 52%, #c27013);
+    box-shadow: 0 0 0 4px #2a180f, 0 0 0 6px #b78545, 0 0 22px #ff982e66;
+    cursor: pointer; display: grid; place-items: center;
+    transition: filter .15s;
+  }
+  .radio button:hover { filter: brightness(1.13); }
+  .radio button:disabled { cursor: wait; filter: grayscale(.5) brightness(.8); }
+  .is-on .radio button { animation: button-glow 1.6s ease-in-out infinite; }
+  /* Вспышка света при нажатии */
+  .radio button::after {
+    content: ""; position: absolute; inset: -6px; border-radius: 50%; pointer-events: none; opacity: 0;
+    box-shadow: 0 0 30px 12px #ffc65a;
+  }
+  .radio button.flash::after { animation: flash .7s ease-out; }
+  button:focus-visible, input:focus-visible { outline: 3px solid #fff; outline-offset: 8px; }
+  .play-icon {
+    width: 0; height: 0; margin-left: 5px;
+    border-top: 12px solid transparent; border-bottom: 12px solid transparent; border-left: 19px solid #38200e;
+  }
+  .is-on .play-icon { width: 19px; height: 19px; background: #38200e; border: 0; margin: 0; }
+
+  .pumpkin-fire {
+    position: absolute; inset: 0; background: #ffdc6a; mix-blend-mode: soft-light; opacity: .2;
+    clip-path: polygon(28% 57%, 37% 43%, 47% 57%, 28% 57%, 53% 65%, 58% 57%, 64% 65%, 53% 65%, 66% 56%, 74% 44%, 82% 55%, 66% 56%, 86% 60%, 82% 74%, 71% 81%, 49% 84%, 33% 77%, 23% 64%, 28% 67%, 35% 71%, 46% 74%, 61% 74%, 74% 68%, 86% 60%);
+    animation: ember 3.7s linear infinite;
+  }
+  /* Ореолы света вокруг огня: тыква и каждое пламя свечи */
+  .halo {
+    position: absolute; aspect-ratio: 1; transform: translate(-50%, -50%); border-radius: 50%;
+    pointer-events: none; mix-blend-mode: screen;
+  }
+  .pumpkin .halo {
+    left: 52%; top: 62%; width: 150%;
+    background: radial-gradient(circle, #ffb34a40, #ff7a1a1c 35%, transparent 65%);
+    animation: ember 3.7s linear infinite;
+  }
+  .candles .halo {
+    width: 140%;
+    background: radial-gradient(circle, #fff1b0aa 0, #ffc25a55 9%, #ff982e26 26%, transparent 55%);
+    animation: candle-flicker 1.7s ease-in-out infinite alternate;
+  }
+  .halo.first { left: 32%; top: 7%; }
+  .halo.second { left: 69.7%; top: 36%; width: 120%; animation-duration: 2.3s; animation-delay: -.8s; }
+  .candles > .flame {
+    position: absolute; width: 12%; height: 25%; object-fit: fill;
+    transform-origin: 50% 98%; filter: drop-shadow(0 0 7px #ffad32) drop-shadow(0 0 16px #ff982e99);
+    animation: flame 1.7s ease-in-out infinite alternate;
+  }
+  .flame.first { left: 26%; top: -5.3%; }
+  .flame.second { left: 63.7%; top: 23.6%; animation-duration: 2.3s; animation-delay: -.8s; }
+
+  .reflection {
+    height: 7%; z-index: 1; pointer-events: none;
+    background: radial-gradient(ellipse, #ff982e44, transparent 65%); filter: blur(9px);
+    animation: ember 3.7s linear infinite;
+  }
+  .pumpkin-reflection { --x: 95; --y: 712; --w: 300; }
+  .candle-reflection { --x: 1270; --y: 718; --w: 300; animation-duration: 2.3s; }
+  .radio-reflection { --x: 560; --y: 790; --w: 550; z-index: 3; animation: ember 3.2s linear infinite; }
+
+  .controls { position: absolute; top: 85%; width: 100%; text-align: center; z-index: 6; }
+  .status {
+    font: clamp(15px, 1.8cqw, 30px) Georgia, serif; color: var(--ivory);
+    min-height: 1.3em; margin-bottom: 1%;
+  }
+  .status.live { color: var(--gold); }
+  .status.live::before {
+    content: ""; display: inline-block; width: .45em; height: .45em; border-radius: 50%;
+    background: #ff3b3b; margin-right: .5em; vertical-align: .1em; animation: blink 1.2s infinite;
+  }
+  .volume { display: flex; align-items: center; justify-content: center; gap: 12px; }
+  .volume button { background: none; border: 0; padding: 4px; cursor: pointer; line-height: 0; }
+  .volume svg { width: 22px; height: 22px; fill: var(--muted); transition: fill .15s; }
+  .volume button:hover svg { fill: var(--gold); }
+  .volume input {
+    -webkit-appearance: none; appearance: none; width: 17%; min-width: 130px; height: 5px;
+    border-radius: 3px; cursor: pointer;
+    background: linear-gradient(to right, var(--gold) var(--fill, 80%), #3a2b47 var(--fill, 80%));
+  }
+  .volume input::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
+    background: #ffe49a; box-shadow: 0 0 8px #ff982e99;
+  }
+  .volume input::-moz-range-thumb {
+    width: 16px; height: 16px; border: 0; border-radius: 50%;
+    background: #ffe49a; box-shadow: 0 0 8px #ff982e99;
+  }
+
+  /* Пыльца поверх всей страницы */
+  #dust { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 10; pointer-events: none; }
+
+  /* Вкладка скрыта — декор замирает, звук продолжает играть */
+  .scene.hidden-tab *, .scene.hidden-tab { animation-play-state: paused !important; }
+
+  @keyframes flame {
+    0% { transform: rotate(-3deg) scale(.94, 1); opacity: .91; }
+    35% { transform: rotate(2deg) scale(1.03, .96); opacity: 1; }
+    70% { transform: rotate(-1deg) scale(.97, 1.04); opacity: .96; }
+    100% { transform: rotate(3deg) scale(.96, .98); opacity: 1; }
+  }
+  @keyframes candle-flicker {
+    0% { opacity: .8; scale: .96; } 30% { opacity: 1; scale: 1.03; }
+    55% { opacity: .86; scale: .99; } 80% { opacity: .97; scale: 1.02; } 100% { opacity: .9; scale: 1; }
+  }
+  @keyframes ember {
+    0%, 100% { opacity: .2; } 12% { opacity: .31; } 29% { opacity: .19; }
+    48% { opacity: .34; } 66% { opacity: .24; } 81% { opacity: .3; }
+  }
+  .pumpkin .halo, .radio-reflection, .candle-reflection, .pumpkin-reflection { animation-name: ember-soft; }
+  @keyframes ember-soft {
+    0%, 100% { opacity: .7; } 12% { opacity: .95; } 29% { opacity: .65; }
+    48% { opacity: 1; } 66% { opacity: .78; } 81% { opacity: .9; }
+  }
+  @keyframes face-pulse {
+    0%, 100% { opacity: .55; scale: .97; } 50% { opacity: .95; scale: 1.03; }
+  }
+  @keyframes face-pulse-live {
+    0%, 100% { opacity: .75; scale: .98; } 20% { opacity: 1; scale: 1.05; }
+    45% { opacity: .8; scale: 1; } 70% { opacity: 1; scale: 1.04; }
+  }
+  @keyframes wall-flicker {
+    0%, 100% { opacity: .75; } 18% { opacity: 1; } 22% { opacity: .62; } 24% { opacity: .95; }
+    47% { opacity: .82; } 63% { opacity: 1; } 66% { opacity: .55; } 69% { opacity: .9; } 85% { opacity: .7; }
+  }
+  @keyframes radio-warm {
+    0%, 100% { filter: drop-shadow(0 18px 18px #000c) brightness(1); }
+    50% { filter: drop-shadow(0 18px 18px #000c) brightness(1.06); }
+  }
+  @keyframes button-glow {
+    0%, 100% { box-shadow: 0 0 0 4px #2a180f, 0 0 0 6px #b78545, 0 0 24px 4px #ff982e88; }
+    50% { box-shadow: 0 0 0 4px #2a180f, 0 0 0 6px #d9a35a, 0 0 46px 14px #ffb536aa; }
+  }
+  @keyframes flash {
+    0% { opacity: 1; transform: scale(.8); } 100% { opacity: 0; transform: scale(1.9); }
+  }
+  @keyframes needle-lock {
+    0% { box-shadow: 0 0 6px 1px #ffb536cc, 0 0 16px 3px #ff982e66; }
+    25% { box-shadow: 0 0 10px 3px #fff1b0, 0 0 34px 10px #ffb536cc; }
+    100% { box-shadow: 0 0 6px 1px #ffb536cc, 0 0 16px 3px #ff982e66; }
+  }
+  @keyframes blink { 50% { opacity: .2; } }
+
+  @media (max-width: 640px) {
+    .scene { --canvas: 600; width: 100vw; aspect-ratio: 600 / 800; min-height: 560px; }
+    .wall-glow { background: radial-gradient(ellipse 22% 34% at 50% 46%, #9a5ae066, #6a35a833 45%, transparent 75%); }
+    header { top: 5%; }
+    .brand { font-size: 11px; }
+    h1 { font-size: 12cqw; margin-top: 4%; }
+    header p { font-size: 3.8cqw; padding: 0 8%; }
+    .radio { --x: 20; --y: 342; --w: 560; }
+    .radio-shadow { --x: 70; --y: 628; --w: 460; }
+    .radio-reflection { --x: 185; --y: 640; --w: 230; }
+    .pumpkin { --x: -4; --y: 490; --w: 118; }
+    .candles { --x: 503; --y: 500; --w: 96; }
+    .pumpkin-reflection { --x: -20; --y: 588; --w: 150; }
+    .candle-reflection { --x: 485; --y: 594; --w: 130; }
+    .controls { top: 88%; }
+    .status { font-size: 18px; margin-bottom: 10px; }
+    .volume input { width: 35%; }
+    .play-icon { border-top-width: 9px; border-bottom-width: 9px; border-left-width: 15px; }
+    .is-on .play-icon { width: 15px; height: 15px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+    #dust { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="backdrop" aria-hidden="true">
+  <div class="bg-layer" id="bgLayer">
+    <div class="background"></div>
+    <div class="wall-glow"></div>
+    <div class="shade"></div>
+  </div>
+  <div class="vignette"></div>
+</div>
+<main class="scene" id="scene">
+
+  <header>
+    <div class="brand">SIDORIN LAB</div>
+    <h1 id="title">ТЫКВА FM</h1>
+    <p>Корпоративная частота потустороннего.</p>
+  </header>
+
+  <div class="placed reflection pumpkin-reflection back"></div>
+  <div class="placed reflection candle-reflection back"></div>
+  <div class="placed pumpkin back">
+    <div class="halo"></div>
+    <img src="assets/pumpkin.webp" alt="">
+    <div class="pumpkin-fire"></div>
+  </div>
+  <div class="placed candles back">
+    <img src="assets/candles.webp" alt="">
+    <div class="halo first"></div>
+    <div class="halo second"></div>
+    <img class="flame first" src="assets/flame.svg" alt="">
+    <img class="flame second" src="assets/flame.svg" alt="">
+  </div>
+
+  <div class="placed radio-shadow front"></div>
+  <div class="placed reflection radio-reflection front"></div>
+  <div class="placed radio front">
+    <img src="assets/radio.webp" alt="Винтажный радиоприёмник с тыквенной улыбкой">
+    <div class="radio-glow"></div>
+    <div class="radio-beat"></div>
+    <div class="needle" id="needle"></div>
+    <button id="play" disabled aria-label="Включить эфир" aria-pressed="false"><span class="play-icon"></span></button>
+  </div>
+
+  <div class="controls">
+    <div class="status" id="status" role="status">Настраиваю эфир…</div>
+    <div class="volume" id="volumeBox">
+      <button id="mute" aria-label="Выключить звук">
+        <svg id="muteIcon" viewBox="0 0 24 24"></svg>
+      </button>
+      <input type="range" id="volume" min="0" max="100" value="80" aria-label="Громкость">
+    </div>
+  </div>
+</main>
+<canvas id="dust" aria-hidden="true"></canvas>
+
+<audio id="audio" preload="none"></audio>
+
+<script>
+(function () {
+  var cfg = window.RADIO;
+  var audio = document.getElementById("audio");
+  var scene = document.getElementById("scene");
+  var btn = document.getElementById("play");
+  var statusEl = document.getElementById("status");
+
+  document.getElementById("title").textContent = cfg.title;
+  document.title = cfg.title;
+
+  var start = new Date(cfg.start).getTime();
+  var durations = [];   // секунды каждого файла
+  var total = 0;
+  var clockShift = 0;   // поправка часов компьютера по часам сервера, мс
+  var on = false;       // слушатель включил эфир
+  var current = -1;     // какой файл сейчас играет
+  var waitTimer = null;
+
+  function setStatus(text, live) {
+    statusEl.textContent = text;
+    statusEl.className = "status" + (live ? " live" : "");
+  }
+
+  function now() { return Date.now() + clockShift; }
+
+  // Длительность файла узнаём по его заголовку, без скачивания целиком
+  function duration(src) {
+    return new Promise(function (resolve, reject) {
+      var a = new Audio();
+      a.preload = "metadata";
+      a.onloadedmetadata = function () { resolve(a.duration); a.src = ""; };
+      a.onerror = function () { reject(src); };
+      a.src = src;
+    });
+  }
+
+  // Время берём с сервера, чтобы неточные часы на чьём-то ноутбуке не сбивали эфир
+  function syncClock() {
+    var t0 = Date.now();
+    return fetch(location.href, { method: "HEAD", cache: "no-store" }).then(function (r) {
+      var server = Date.parse(r.headers.get("Date"));
+      if (!isNaN(server)) clockShift = server + (Date.now() - t0) / 2 - Date.now();
+    }).catch(function () {});
+  }
+
+  // Что должно звучать прямо сейчас: номер файла и секунда внутри него
+  function position() {
+    var t = (now() - start) / 1000;
+    if (t < 0) return { wait: -t };
+    if (t >= total) {
+      if (!cfg.loop) return { over: true };
+      t = t % total;
+    }
+    for (var i = 0; i < durations.length; i++) {
+      if (t < durations[i]) return { index: i, at: t };
+      t -= durations[i];
+    }
+    return { index: 0, at: 0 };
+  }
+
+  function countdown(sec) {
+    var d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600),
+        m = Math.floor(sec % 3600 / 60), s = Math.floor(sec % 60);
+    var p = function (n) { return (n < 10 ? "0" : "") + n; };
+    return (d ? d + " д " : "") + p(h) + ":" + p(m) + ":" + p(s);
+  }
+
+  function finished() {
+    audio.pause();
+    setStatus("Эфир завершён. Спасибо, что были с нами!");
+  }
+
+  function tune(afterEnded) {
+    clearTimeout(waitTimer);
+    if (!on) return;
+    var pos = position();
+    if (pos.wait) {
+      audio.pause();
+      setStatus("Эфир начнётся через " + countdown(pos.wait));
+      waitTimer = setTimeout(tune, 1000);
+      return;
+    }
+    if (pos.over) { finished(); return; }
+    // Файл закончился чуть раньше расчёта — сразу переходим к следующему
+    if (afterEnded && pos.index === current) {
+      pos = { index: (current + 1) % durations.length, at: 0 };
+      if (pos.index === 0 && !cfg.loop) { finished(); return; }
+    }
+    if (pos.index !== current) {
+      current = pos.index;
+      audio.src = cfg.tracks[current];
+    }
+    if (Math.abs(audio.currentTime - pos.at) > 3) audio.currentTime = pos.at;
+    audio.play().catch(function () {
+      cancelSweep();
+      stop();
+      setStatus("Не получилось включить звук. Нажмите ещё раз.");
+    });
+  }
+
+  function setOn(value) {
+    on = value;
+    scene.classList.toggle("is-on", on);
+    btn.setAttribute("aria-pressed", String(on));
+    btn.setAttribute("aria-label", on ? "Выключить эфир" : "Включить эфир");
+  }
+
+  function stop() {
+    setOn(false);
+    clearTimeout(waitTimer);
+    audio.pause();
+  }
+
+  // Шкала частот: где на картинке стоят подписи 88…108 (x из 1672). Деления на картинке неравномерные
+  var needle = document.getElementById("needle");
+  var DIAL = [[88, 604.5], [92, 692], [96, 777.5], [100, 870], [104, 966.5], [108, 1063]];
+  var target = cfg.frequency || 100;
+  var sweeping = false, sweepId = 0;
+  var reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  function needleAt(f) {
+    f = Math.max(87.6, Math.min(108.4, f));
+    var i = 0;
+    while (i < DIAL.length - 2 && f > DIAL[i + 1][0]) i++;
+    var a = DIAL[i], b = DIAL[i + 1];
+    var x = a[1] + (f - a[0]) / (b[0] - a[0]) * (b[1] - a[1]);
+    needle.style.left = (x / 1672 * 100) + "%";
+  }
+  var freq = 89.5 + Math.random() * 4;
+  needleAt(freq);
+
+  // Помехи эфира, пока стрелка ищет станцию
+  var actx = null, noise = null, noiseGain = null;
+  function staticStart() {
+    try {
+      actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+      actx.resume();
+      var len = actx.sampleRate * 2, buf = actx.createBuffer(1, len, actx.sampleRate), d = buf.getChannelData(0);
+      for (var i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (Math.random() < .002 ? 1 : .35);
+      noise = actx.createBufferSource(); noise.buffer = buf; noise.loop = true;
+      var band = actx.createBiquadFilter(); band.type = "bandpass"; band.frequency.value = 1700; band.Q.value = .7;
+      noiseGain = actx.createGain(); noiseGain.gain.value = 0;
+      noise.connect(band); band.connect(noiseGain); noiseGain.connect(actx.destination);
+      noise.start();
+    } catch (e) { noise = null; }
+  }
+  function staticLevel(v) { if (noiseGain) noiseGain.gain.value = v * volume / 100 * .3; }
+  function staticStop() {
+    if (noise) { try { noise.stop(); } catch (e) {} }
+    noise = null; noiseGain = null;
+  }
+
+  // Свет под музыку: слушаем звук через анализатор и отдаём сцене громкость (--level) и удары (--beat).
+  // С диска (file://) браузер не даёт анализировать звук и глушит его, поэтому там свет просто не реагирует
+  var analyser = null, bins = null, react = { level: 0, beat: 0 };
+  window.TYKVA = react;
+  function connectAnalyser() {
+    if (analyser || reduceMotion || !/^https?:$/.test(location.protocol)) return;
+    try {
+      actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+      var src = actx.createMediaElementSource(audio);
+      analyser = actx.createAnalyser();
+      analyser.fftSize = 1024;
+      analyser.smoothingTimeConstant = .3;
+      src.connect(analyser);
+      analyser.connect(actx.destination);
+      bins = new Uint8Array(analyser.frequencyBinCount);
+      requestAnimationFrame(listenMusic);
+    } catch (e) { analyser = null; }
+  }
+
+  var avg = 0, peak = 0, fluxAvg = 0, prev = null, lastBeat = 0, lastT = 0, shown = { level: -1, beat: -1 };
+  function listenMusic(t) {
+    var dt = Math.min(100, t - (lastT || t)); lastT = t;
+    var full = 0, flux = 0, hz = actx.sampleRate / analyser.fftSize, i;
+    var b1 = Math.max(1, Math.round(40 / hz)), b2 = Math.round(250 / hz), f2 = Math.round(8000 / hz);
+    if (!audio.paused) {
+      analyser.getByteFrequencyData(bins);
+      for (i = 1; i <= f2; i++) full += bins[i];
+      full /= f2 * 255;
+      // Удар — резкий прирост энергии в басах и бочке по сравнению с прошлым кадром
+      if (prev) for (i = b1; i <= b2; i++) flux += Math.max(0, bins[i] - prev[i]);
+      flux /= (b2 - b1 + 1) * 255;
+      prev = prev || new Uint8Array(bins.length);
+      prev.set(bins);
+    } else prev = null;
+
+    // Громкость относительно средней по песне: тихий куплет — свет спокойный, громкий припев — ярче
+    var k = dt / 1000;
+    if (!avg && full) { avg = full * .9; peak = full * 1.1; }   // первый кадр песни — без разгона
+    avg +=(full - avg) * Math.min(1, k / 6);                 // среднее за ~6 секунд
+    peak = Math.max(full, peak - k * .02, avg + .02);         // потолок медленно опускается
+    var rel = Math.max(0, Math.min(1, (full - avg) / (peak - avg) * 1.1 + .05));
+    if (audio.paused) rel = 0;
+    react.level += (rel - react.level) * Math.min(1, k * (rel > react.level ? 8 : 2.5));
+
+    fluxAvg += (flux - fluxAvg) * Math.min(1, k * 4);
+    if (flux > fluxAvg * 2.2 + .012 && t - lastBeat > 220) {
+      react.beat = Math.min(1, .55 + (flux - fluxAvg) * 12);
+      lastBeat = t;
+    } else {
+      react.beat *= Math.exp(-dt / 170);
+    }
+    // В CSS пишем не чаще, чем заметно глазу
+    if (Math.abs(react.level - shown.level) > .02 || Math.abs(react.beat - shown.beat) > .02) {
+      shown.level = react.level; shown.beat = react.beat;
+      document.documentElement.style.setProperty("--level", react.level.toFixed(2));
+      document.documentElement.style.setProperty("--beat", react.beat.toFixed(2));
+    }
+    requestAnimationFrame(listenMusic);
+  }
+
+  // Стрелка пробегает несколько частот, замедляется и останавливается на нужной
+  function sweep(done) {
+    var id = ++sweepId;
+    if (reduceMotion) { freq = target; needleAt(freq); done(); return; }
+    var stops = [], far = 3 + Math.floor(Math.random() * 2);
+    for (var i = 0; i < far; i++) stops.push({ f: 88.5 + Math.random() * 19, ms: 380 + Math.random() * 300 });
+    var side = Math.random() < .5 ? -1 : 1;
+    stops.push({ f: target + side * (1 + Math.random()), ms: 420 });
+    stops.push({ f: target - side * .4, ms: 320 });
+    stops.push({ f: target, ms: 300 });
+    var totalMs = stops.reduce(function (s, x) { return s + x.ms; }, 0), elapsed = 0, k = 0, from = freq, t0 = null;
+    sweeping = true;
+    staticStart();
+    function step(t) {
+      if (id !== sweepId) return;
+      if (t0 === null) t0 = t;
+      var seg = stops[k], p = Math.min(1, (t - t0) / seg.ms);
+      var e = p < .5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+      var shake = k < far ? Math.sin(t / 37) * .12 * (1 - p) : 0;   // стрелка подрагивает на быстром ходу
+      freq = from + (seg.f - from) * e + shake;
+      needleAt(freq);
+      var progress = (elapsed + seg.ms * p) / totalMs;
+      tuneGain = Math.pow(progress, 3);             // эфир проступает сквозь помехи
+      applyVolume();
+      staticLevel((1 - progress) * (.6 + .4 * Math.random()));
+      if (p < 1) { requestAnimationFrame(step); return; }
+      elapsed += seg.ms; from = seg.f; k++; t0 = null;
+      if (k < stops.length) { requestAnimationFrame(step); return; }
+      sweeping = false;
+      tuneGain = 1; applyVolume(); staticStop();
+      needle.classList.remove("locked"); void needle.offsetWidth; needle.classList.add("locked");
+      done();
+    }
+    requestAnimationFrame(step);
+  }
+
+  function cancelSweep() {
+    sweepId++; sweeping = false; staticStop();
+    tuneGain = 1; applyVolume();
+  }
+
+  btn.onclick = function () {
+    btn.classList.remove("flash");
+    void btn.offsetWidth;   // перезапуск вспышки
+    btn.classList.add("flash");
+    if (on) { cancelSweep(); stop(); setStatus("Эфир на паузе. Нажмите — и вернётесь в прямой эфир."); return; }
+    setOn(true);
+    setStatus("Ловлю волну…");
+    connectAnalyser();
+    if (actx) actx.resume();
+    tuneGain = 0; applyVolume();
+    tune();
+    sweep(function () {
+      if (on && !audio.paused) setStatus("В эфире", true);
+    });
+  };
+
+  // Приёмник «теплеет» только когда звук действительно идёт
+  audio.addEventListener("playing", function () {
+    scene.classList.add("is-playing");
+    if (on && !sweeping) setStatus("В эфире", true);
+  });
+  ["pause", "waiting", "error"].forEach(function (e) {
+    audio.addEventListener(e, function () { scene.classList.remove("is-playing"); });
+  });
+  audio.addEventListener("ended", function () { tune(true); });
+  audio.addEventListener("loadedmetadata", function () {
+    // Новый файл загрузился — встаём на нужную секунду
+    if (on) { var pos = position(); if (pos.index === current) audio.currentTime = pos.at; }
+  });
+  audio.addEventListener("waiting", function () { if (on && !sweeping) setStatus("Загружаю…"); });
+  audio.addEventListener("error", function () {
+    if (on) { setStatus("Не удалось загрузить запись, пробую снова…"); setTimeout(function () { current = -1; tune(); }, 3000); }
+  });
+
+  // Громкость: ползунок и кнопка «без звука». Уровень запоминаем в браузере слушателя
+  var slider = document.getElementById("volume");
+  var muteBtn = document.getElementById("mute");
+  var muteIcon = document.getElementById("muteIcon");
+  var SPEAKER = '<path d="M3 9v6h4l5 5V4L7 9H3z"/>';
+  var LOUD = SPEAKER + '<path d="M16.5 12A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4zM14 3.2v2.1a7 7 0 0 1 0 13.4v2.1a9 9 0 0 0 0-17.6z"/>';
+  var QUIET = SPEAKER + '<path d="M16.5 12A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4z"/>';
+  var MUTED = SPEAKER + '<path d="M16 9.4l1.4-1.4 2.1 2.1 2.1-2.1L23 9.4l-2.1 2.1 2.1 2.1-1.4 1.4-2.1-2.1-2.1 2.1-1.4-1.4 2.1-2.1z"/>';
+  var lastVolume = 80;
+  var volume = 80;     // что выбрал слушатель, 0–100
+  var tuneGain = 1;    // приглушение, пока стрелка ищет волну
+
+  function applyVolume() { audio.volume = volume / 100 * tuneGain; }
+
+  function setVolume(v) {
+    v = Math.max(0, Math.min(100, v));
+    slider.value = v;
+    volume = v;
+    applyVolume();
+    slider.style.setProperty("--fill", v + "%");
+    muteIcon.innerHTML = v === 0 ? MUTED : v < 50 ? QUIET : LOUD;
+    muteBtn.setAttribute("aria-label", v === 0 ? "Включить звук" : "Выключить звук");
+    if (v > 0) lastVolume = v;
+    try { localStorage.setItem("radioVolume", v); } catch (e) {}
+  }
+
+  slider.addEventListener("input", function () { setVolume(+slider.value); });
+  muteBtn.onclick = function () { setVolume(+slider.value === 0 ? lastVolume : 0); };
+
+  var saved = 80;
+  try { var s = localStorage.getItem("radioVolume"); if (s !== null) saved = +s; } catch (e) {}
+  setVolume(isNaN(saved) ? 80 : saved);
+
+  // На iPhone и iPad громкость меняется только кнопками телефона — ползунок там бесполезен
+  if (/iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)) {
+    document.getElementById("volumeBox").style.display = "none";
+  }
+
+  document.addEventListener("visibilitychange", function () {
+    scene.classList.toggle("hidden-tab", document.hidden);
+  });
+
+  // Раз в полминуты сверяемся с часами: если отстали больше чем на 3 секунды — догоняем
+  setInterval(function () { if (on && !audio.paused) tune(); }, 30000);
+
+  Promise.all([syncClock(), Promise.all(cfg.tracks.map(duration))]).then(function (res) {
+    durations = res[1];
+    total = durations.reduce(function (a, b) { return a + b; }, 0);
+    btn.disabled = false;
+    var pos = position();
+    if (pos.wait) setStatus("Эфир начнётся через " + countdown(pos.wait));
+    else if (pos.over) setStatus("Эфир завершён. Спасибо, что были с нами!");
+    else setStatus("Нажмите на кнопку приёмника");
+  }).catch(function (src) {
+    setStatus("Не нашёл файл: " + src);
+  });
+})();
+
+// Декор: летающая пыльца, которая вспыхивает в лучах света
+(function () {
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  var canvas = document.getElementById("dust");
+  var ctx = canvas.getContext("2d");
+  var scene = document.getElementById("scene");
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+  var W = 0, H = 0, motes = [], lights = [];
+
+  // Мягкая точка заранее, чтобы не рисовать градиент на каждую пылинку
+  function sprite(color) {
+    var c = document.createElement("canvas"), g;
+    c.width = c.height = 32;
+    g = c.getContext("2d").createRadialGradient(16, 16, 0, 16, 16, 16);
+    g.addColorStop(0, color); g.addColorStop(.35, color.replace("1)", ".45)")); g.addColorStop(1, color.replace("1)", "0)"));
+    var x = c.getContext("2d"); x.fillStyle = g; x.fillRect(0, 0, 32, 32);
+    return c;
+  }
+  var WARM = sprite("rgba(255, 214, 140, 1)");
+  var COOL = sprite("rgba(214, 190, 255, 1)");
+
+  function rectOf(sel) { return document.querySelector(sel).getBoundingClientRect(); }
+
+  // Источники света: лицо приёмника, два огня свечей, тыква, фиолетовое пятно на стене
+  function measure() {
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    var r = rectOf(".radio img"), p = rectOf(".pumpkin img"), s = rectOf(".scene");
+    var f1 = rectOf(".flame.first"), f2 = rectOf(".flame.second");
+    lights = [
+      { x: r.left + r.width * .5, y: r.top + r.height * .6, R: r.width * .28, k: 1, warm: true },
+      { x: f1.left + f1.width / 2, y: f1.top + f1.height / 2, R: s.width * .12, k: 1.2, warm: true },
+      { x: f2.left + f2.width / 2, y: f2.top + f2.height / 2, R: s.width * .1, k: 1.1, warm: true },
+      { x: p.left + p.width * .5, y: p.top + p.height * .62, R: p.width * .9, k: .8, warm: true },
+      { x: s.left + s.width * .5, y: s.top + s.height * .38, R: s.width * .3, k: .6, warm: false }
+    ];
+    var n = Math.max(35, Math.min(110, Math.round(W * H / 14000)));
+    while (motes.length < n) motes.push(mote(true));
+    motes.length = n;
+  }
+
+  function mote(anywhere) {
+    var depth = Math.random();   // 0 — далеко (мелкая, медленная), 1 — близко
+    return {
+      x: Math.random() * W, y: anywhere ? Math.random() * H : H + 10,
+      size: 1.5 + depth * 4.5,
+      vx: (Math.random() - .5) * .15, vy: -(.05 + Math.random() * .2) * (.5 + depth),
+      wobble: Math.random() * 6.28, wspeed: .0004 + Math.random() * .0008,
+      phase: Math.random() * 6.28, twinkle: .001 + Math.random() * .003,
+      depth: depth
+    };
+  }
+
+  function frame(t) {
+    if (!document.hidden) {
+      ctx.clearRect(0, 0, W, H);
+      for (var i = 0; i < motes.length; i++) {
+        var m = motes[i];
+        m.x += m.vx + Math.sin(t * m.wspeed + m.wobble) * .18;
+        m.y += m.vy;
+        if (m.y < -10) motes[i] = m = mote(false);
+        if (m.x < -10) m.x = W + 10; else if (m.x > W + 10) m.x = -10;
+
+        // Сколько света падает на пылинку и какого цвета
+        var lit = 0, warm = 0;
+        for (var j = 0; j < lights.length; j++) {
+          var L = lights[j], dx = m.x - L.x, dy = m.y - L.y;
+          var v = 1 - Math.sqrt(dx * dx + dy * dy) / L.R;
+          if (v > 0) { v = v * v * L.k; lit += v; if (L.warm) warm += v; }
+        }
+        var tw = .5 + .5 * Math.sin(t * m.twinkle + m.phase);
+        var music = window.TYKVA ? 1 + window.TYKVA.level * .6 + window.TYKVA.beat * .6 : 1;
+        var alpha = ((.08 + .12 * m.depth) * (.5 + .5 * tw) + Math.min(lit, 1.2) * (.35 + .65 * tw) * .8) * music;
+        if (alpha < .02) continue;
+        ctx.globalAlpha = Math.min(alpha, 1);
+        var sz = m.size * (1 + Math.min(lit, 1) * .6) * 2.4;
+        ctx.drawImage(warm >= lit * .5 && lit > .05 ? WARM : COOL, m.x - sz / 2, m.y - sz / 2, sz, sz);
+      }
+      ctx.globalAlpha = 1;
+    }
+    requestAnimationFrame(frame);
+  }
+
+  window.addEventListener("resize", measure);
+  window.addEventListener("load", measure);
+  measure();
+  requestAnimationFrame(frame);
+})();
+
+// Фон на весь экран. Предметы стоят в сцене, которая целиком влезает в окно, а фон увеличиваем так,
+// чтобы он закрывал всё окно и линия стола (76% высоты картинки 1672×941) оставалась под предметами
+(function () {
+  var layer = document.getElementById("bgLayer");
+  var scene = document.getElementById("scene");
+  var IW = 1672, IH = 941, HX = 836, HY = 715;
+  function fit() {
+    var vw = window.innerWidth, vh = window.innerHeight, s = scene.getBoundingClientRect();
+    var ax = s.left + s.width / 2, ay = s.top + s.height * HY / IH;
+    var k = Math.max(s.height / IH, vw / IW, vh / IH,
+      ay / HY, (vh - ay) / (IH - HY), ax / HX, (vw - ax) / (IW - HX));
+    layer.style.width = IW * k + "px";
+    layer.style.height = IH * k + "px";
+    layer.style.left = ax - HX * k + "px";
+    layer.style.top = ay - HY * k + "px";
+  }
+  window.addEventListener("resize", fit);
+  fit();
+})();
+</script>
+</body>
+</html>
